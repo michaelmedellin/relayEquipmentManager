@@ -5,6 +5,7 @@ COPY tsconfig*.json ./
 RUN npm ci 
 COPY . ./
 RUN npm run build
+RUN npm install --omit=dev 
 
 # FROM node:18 AS ts-remover
 # WORKDIR /app
@@ -22,7 +23,6 @@ RUN npm run build
 FROM gcr.io/distroless/nodejs:18
 WORKDIR /app
 COPY --from=build-env /app ./
-RUN npm ci --omit=dev
 CMD ["./dist/app.js"]
 
 
