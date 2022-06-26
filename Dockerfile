@@ -2,7 +2,7 @@ FROM node:18 AS build-env
 WORKDIR /app
 COPY package*.json ./
 COPY tsconfig*.json ./
-RUN npm ci --omit=dev
+RUN npm ci 
 COPY . ./
 RUN npm run build
 
