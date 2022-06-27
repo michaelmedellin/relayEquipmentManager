@@ -8,7 +8,5 @@ RUN npm run build
 
 FROM gcr.io/distroless/nodejs:18
 WORKDIR /app
-RUN mkdir ./dist
-COPY --from=build-env /app/dist ./dist
-COPY --from=build-env /app/defaultConfig.json ./
+COPY --from=build-env /app ./
 CMD ["dist/app.js"]
