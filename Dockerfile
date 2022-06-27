@@ -16,4 +16,4 @@ RUN npm ci --only=production
 FROM gcr.io/distroless/nodejs:18
 WORKDIR /app
 COPY --from=ts-remover /app ./
-CMD ["app.js"]
+CMD ["dist/app.js"]
