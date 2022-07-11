@@ -13,7 +13,8 @@ export class i2cRelay extends i2cDeviceBase {
     protected static controllerTypes = [
         { name: 'mcp23017', desc: 'MCP23017 Based', options: { idType: 'bit', maxRelays: 16 }},
         { name: 'mcp23008', desc: 'MCP23008 Based', options: { idType: 'bit', maxRelays: 8 } },
-        { name: 'pcf8574', desc: 'PCF8574 Based', options: { idType: 'bit', maxRelays: 8 }},
+        { name: 'pcf8574', desc: 'PCF8574 Based', options: { idType: 'pcf857x', maxRelays: 8 }},
+        { name: 'pcf8575', desc: 'PCF8575 Based', options: { idType: 'pcf857x', maxRelays: 16 } },
         { name: 'seeed', desc: 'Seeed Studio', options: { idType: 'bit', maxRelays: 8}},
         { name: 'dockerPi4', desc: 'Docker Pi 4', options: { idType: 'ordinal', maxRelays: 4 } },
         { name: 'sequent4', desc: 'Sequent 4', options: { idType: 'sequent4', maxRelays: 4 }   },
@@ -78,14 +79,37 @@ export class i2cRelay extends i2cDeviceBase {
                 { name: 'CFG', register: 0x03, desc: 'Configuration register for the relay' }
             ]
         },
-
-        pcf8574: { read: [], write: [], config: [] },
+        sequent8v3: {
+            state: [0x01],
+            write: [0x01],
+            config: [
+                { name: 'CFG', register: 0x03, desc: 'Configuration register for the relay' }
+            ]
+        },
+        sequent8IND: {
+            state: [0x01],
+            write: [0x01],
+            config: [
+                { name: 'CFG', register: 0x03, desc: 'Configuration register for the relay' }
+            ]
+        },
+        pcf8574: {
+            read: [], write: [], config: [
+                { name: 'P0x', register: 0x00, desc: 'I/O value 1-8' }
+            ]
+        }, // There are no configuration, read, or write bytes for the PCF series
+        pcf8575: {
+            read: [], write: [], config: [
+                { name: 'P0x', register: 0x00, desc: 'I/O value 1-8' },
+                { name: 'P1x', register: 0x00, desc: 'I/O value 9-16' }
+            ]
+        },
         seeed: { read: [0x06], write: [0x06], config: [] }
     };
     protected _latchTimers = {};
     protected latches = new LatchTimers();
     protected _relayBitmask1 = 0;
-    protected _relayBitMask2 = 0;
+    protected _relayBitmask2 = 0;
     public get relays() { return typeof this.values.relays === 'undefined' ? this.values.relays = [] : this.values.relays; }
     public set relays(val) { this.values.relays = val; }
     protected getReadCommandByte(ord: number): number {
@@ -99,6 +123,33 @@ export class i2cRelay extends i2cDeviceBase {
     protected async initRegisters() {
         try {
             switch (this.device.options.controllerType) {
+                case 'pcf8574':
+                case 'pcf8575':
+                    // There are no config registers for the is IO extender but we will be pushing these on the interface.
+                    let cb = i2cRelay.commandBytes[this.device.options.controllerType] || { state: [], init: [], config: [] };
+                    if (typeof this.device.info.registers === 'undefined') this.device.info.registers = [];
+                    let regP0 = this.device.info.registers.find(elem => elem.name === 'P0x');
+                    if (typeof regP0 === 'undefined') {
+                        regP0 = extend({ name: 'P0x', register: 0x00, desc: 'I/0 value 1-8', value: 0x00 }, cb.config.find(elem => elem.name === 'P0x'));
+                        this.device.info.registers.push(regP0);
+                    }
+                    for (let i = 0; i < 8 && i < this.relays.length; i++) {
+                        let relay = this.relays[i];
+                        if (relay.enabled && relay.state === true) regP0.value |= (1 << (relay.id - 1));
+                    }
+                    if (this.device.options.controllerType === 'pcf8575') {
+                        // There are no configuration registers to initialize for these.
+                        let regP1 = this.device.info.registers.find(elem => elem.name === 'P1x');
+                        if (typeof regP1 === 'undefined') {
+                            regP0 = extend({ name: 'P1x', register: 0x00, desc: 'I/0 value 9-16', value: 0x00 }, cb.config.find(elem => elem.name === 'P1x'));
+                            this.device.info.registers.push(regP0);
+                        }
+                        for (let i = 8; i < 16 && i < this.relays.length; i++) {
+                            let relay = this.relays[i];
+                            if (relay.enabled && relay.state === true) regP1.value |= (1 << (relay.id - 8));
+                        }
+                    }
+                    break;
                 case 'mcp23017':
                     // Set the registers to output for all the relays we have.
                     {
@@ -141,6 +192,8 @@ export class i2cRelay extends i2cDeviceBase {
                     break;
                 case 'sequent8':
                 case 'sequent4':
+                case 'sequent8IND':
+                case 'sequent8v3':
                     {
                         await this.readConfigRegisters();
                         let reg = this.device.info.registers.find(elem => elem.name === 'CFG') || { value: 0x00 };
@@ -196,6 +249,52 @@ export class i2cRelay extends i2cDeviceBase {
         catch (err) {
             logger.error(`${this.device.address} - ${this.device.name} Bus #${this.i2c.busNumber} Read Command: ${ err.message }`); this.hasFault = true; }
     }
+    protected async readBuffer(bytes:number): Promise<{ bytesRead: number, buffer: Buffer }> {
+        try {
+            let r: { bytesRead: number, buffer: Buffer } = await this.i2c.read(this.device.address, bytes);
+            logger.debug(`${this.device.address} - ${this.device.name} Executed read buffer 0x${this.device.address.toString(16)} ${r.bytesRead} [${r.buffer.join(',')}]`);
+            return r;
+        } catch(err) { logger.error(`${this.device.address} - ${this.device.name} Bus #${this.i2c.busNumber} ReadBuffer: ${err.message}`); this.hasFault = true; }
+    }
+    protected async writeBuffer(bytes: number, buffer: Buffer): Promise<{ bytesWritten: number, buffer: Buffer }> {
+        try {
+            let r: { bytesWritten: number, buffer: Buffer } = await this.i2c.write(this.device.address, bytes, buffer);
+            logger.debug(`${this.device.address} - ${this.device.name} Executed write buffer 0x${this.device.address.toString(16)} ${ r.bytesWritten }[${ r.buffer.join(',') }]`);
+            return r;
+        } catch (err) { logger.error(`${this.device.address} - ${this.device.name} Bus #${this.i2c.busNumber} ReadBuffer: ${err.message}`); this.hasFault = true; }
+    }
+
+    protected async readWord(): Promise<number> {
+        try {
+            let r = await this.readBuffer(2);
+            return r.buffer.readUInt16LE();
+        }
+        catch (err) { logger.error(`${this.device.address} - ${this.device.name} Bus #${this.i2c.busNumber} ReadWord: ${err.message}`); this.hasFault = true; }
+    }
+    protected async readByte(): Promise<number> {
+        try {
+            let r = await this.readBuffer(1);
+            return r.buffer.readUInt8();
+        }
+        catch (err) { logger.error(`${this.device.address} - ${this.device.name} Bus #${this.i2c.busNumber} ReadByte: ${err.message}`); this.hasFault = true; }
+    }
+    protected async writeWord(word: number): Promise<{ bytesWritten: number, buffer: Buffer }> {
+        try {
+            let buffer = Buffer.from([word & 0xFF, (word >> 8) & 0xFF]);
+            let r = await this.writeBuffer(2, buffer);
+            return r;
+        }
+        catch (err) { logger.error(`${this.device.address} writeWord: ${err.message}`); this.hasFault = true; }
+    }
+    protected async writeByte(byte: number): Promise<{ bytesWritten: number, buffer: Buffer }> {
+        try {
+            let buffer = Buffer.from([byte & 0xFF]);
+            let r = await this.writeBuffer(1, buffer);
+            return r;
+        }
+        catch (err) { logger.error(`${this.device.address} writeByte: ${err.message}`); this.hasFault = true; }
+    }
+
     public async emitFeeds() {
         try {
             for (let i = 0; i < this.feeds.length; i++) {
@@ -231,7 +330,6 @@ export class i2cRelay extends i2cDeviceBase {
             }
         }
     }
-
     public async stopReadContinuous() {
         if (typeof this._timerRead !== 'undefined')
             clearTimeout(this._timerRead);
@@ -253,13 +351,14 @@ export class i2cRelay extends i2cDeviceBase {
             let ord = Math.floor((r.id - 1) / 8);
             if (ord + 1 > bytes.length) bytes.push(0);
             let state = false;
+            
             let bm = (1 << (((r.id - (ord * 8)) - 1)));
             if (r.initState === 'on') state = true;
             else if (r.initState === 'off') state = false;
             else if (r.initState === 'last') state = utils.makeBool(r.state);
             else {
-                if (orig.length < ord) {
-                    state = (bytes[ord] & bm) > 0;
+                if (orig.length > ord) {
+                    state = (orig[ord] & bm) > 0;
                     if (r.invert === true) state = !state;
                 }
             }
@@ -305,6 +404,37 @@ export class i2cRelay extends i2cDeviceBase {
                     bytes = this.makeStartupBitmasks(orig);
                     await this.sendCommand([0x01, this.encodeSequent(bytes[0], [0x80, 0x40, 0x20, 0x10])]);
                     if (this.i2c.isMock) this._relayBitmask1 = this.encodeSequent(bytes[0], [0x80, 0x40, 0x20, 0x10]);
+                    break;
+                case 'pcf857x':
+                    {
+                        this.relays.sort((a, b) => { return a.id - b.id; });
+                        let bitmask = 0;
+                        if (this.i2c.isMock) {
+                            let regP0 = this.device.info.registers.find(elem => elem.name === 'P0x');
+                            let regP1 = this.device.info.registers.find(elem => elem.name === 'P1x');
+                            if (typeof regP0 !== 'undefined') bitmask = regP0.value;
+                            if (typeof regP1 !== 'undefined') bitmask |= (regP1.value << 8);
+                        }
+                        else
+                            bitmask = this.options.controllerType === 'pcf8574' ? await this.readByte() : await this.readWord();
+                        orig.push(bitmask & 0xFF);
+                        orig.push((bitmask >> 8) & 0xFF);
+                        bytes = this.makeStartupBitmasks(orig);
+                        if (this.i2c.isMock) {
+                            this._relayBitmask1 = bytes[0];
+                            if (bytes.length > 1) {
+                                this._relayBitmask2 = bytes[1];
+                            }
+                        }
+                        else if (this.options.controllerType === 'pcf8574') {
+                            await this.writeByte(bytes[0]);
+                        }
+                        else {
+                            await this.writeWord((bytes[1] << 8) + (bytes[0] & 0xFF));
+                        }
+                        webApp.emitToClients('i2cDeviceInformation', { bus: this.i2c.busNumber, address: this.device.address, info: { registers: this.device.info.registers } });
+                        await this.readAllRelayStates();
+                    }
                     break;
                 case 'bit':
                     this.relays.sort((a, b) => { return a.id - b.id; });
@@ -435,6 +565,29 @@ export class i2cRelay extends i2cDeviceBase {
                         }
                     }
                     break;
+                case 'pcf857x':
+                    {
+                        let bitmask = this.i2c.isMock ? ((this._relayBitmask2 || 0) << 8)  + this._relayBitmask1 : this.options.controllerType === 'pcf8574' ? await this.readByte() : await this.readWord();
+                        this.relays.sort((a, b) => { return a.id - b.id; });
+                        for (let i = 0; i < this.relays.length; i++) {
+                            let relay = this.relays[i];
+                            if (!utils.makeBool(relay.enabled)) continue;
+                            let state = ((1 << i) & bitmask) > 0;
+                            if (relay.invert === true) state = !state;
+                            if (state !== relay.state) {
+                                relay.state = state;
+                                webApp.emitToClients('i2cDataValues', { bus: this.i2c.busNumber, address: this.device.address, relayStates: [relay] });
+                            }
+                        }
+                        let regP0 = this.device.info.registers.find(elem => elem.name === 'P0x') || { value: 0x00 };
+                        let regP1 = this.device.info.registers.find(elem => elem.name === 'P1x') || { value: 0x00 };
+                        if (regP0.value !== (bitmask & 0xFF) || regP1.value !== (bitmask & 0xFF00) >> 8) {
+                            regP0.value = bitmask & 0xFF;
+                            regP1.value = (bitmask & 0xFF00) >> 8;
+                            webApp.emitToClients('i2cDeviceInformation', { bus: this.i2c.busNumber, address: this.device.address, info: { registers: this.device.info.registers } });
+                        }
+                    }
+                    break;
                 case 'bit':
                     let bmVals = [];
                     // Force a sort so that it gets the correct address.
@@ -446,7 +599,7 @@ export class i2cRelay extends i2cDeviceBase {
                         let bmOrd = Math.floor((relay.id - 1) / 8);
                         let cmdByte = this.getReadCommandByte(bmOrd);
                         if (bmOrd + 1 > bmVals.length) {
-                            if (this.i2c.isMock) bmVals.push(bmOrd === 0 ? this._relayBitmask1 : this._relayBitMask2);
+                            if (this.i2c.isMock) bmVals.push(bmOrd === 0 ? this._relayBitmask1 : this._relayBitmask2);
                             else bmVals.push(await this.readCommand(cmdByte));
                         }
                         let byte = bmVals[bmOrd];
@@ -510,11 +663,22 @@ export class i2cRelay extends i2cDeviceBase {
                         byte = byte & (1 << (relay.id - 1));
                     }
                     break;
+                case 'pcf857x':
+                    {
+                        let bitmask = this.i2c.isMock ? ((this._relayBitmask2 || 0) << 8) + this._relayBitmask1 : this.options.controllerType === 'pcf8574' ? await this.readByte() : await this.readWord();
+                        byte = bitmask & (1 << (relay.id - 1));
+                        let regP0 = this.device.info.registers.find(elem => elem.name === 'P0x') || { value: 0x00 };
+                        let regP1 = this.device.info.registers.find(elem => elem.name === 'P1x') || { value: 0x00 };
+                        regP0.value = bitmask & 0xFF;
+                        regP1.value = (bitmask & 0xFF00) >> 8;
+                        webApp.emitToClients('i2cDeviceInformation', { bus: this.i2c.busNumber, address: this.device.address, info: { registers: this.device.info.registers } });
+                    }
+                    break;
                 case 'bit':
                     let bmOrd = Math.floor((relay.id - 1) / 8);
                     cmdByte = this.getReadCommandByte(bmOrd);
                     byte = await this.readCommand(cmdByte);
-                    if (this.i2c.isMock) byte = bmOrd === 0 ? this._relayBitmask1 : this._relayBitMask2;
+                    if (this.i2c.isMock) byte = bmOrd === 0 ? this._relayBitmask1 : this._relayBitmask2;
                     byte = byte & 1 << ((relay.id - (bmOrd * 8) - 1));
                     break;
                 default:
@@ -659,6 +823,32 @@ export class i2cRelay extends i2cDeviceBase {
                         }
                     }
                     break;
+                case 'pcf857x':
+                    {
+                        await this.readAllRelayStates();
+                        let bitmask = 0x0000;
+                        for (let i = 0; i < this.relays.length; i++) {
+                            let r = this.relays[i];
+                            let current = r.invert === true ? !utils.makeBool(r.state) : utils.makeBool(r.state);
+                                if (relay.id === r.id) {
+                                    let target = r.invert === true ? !utils.makeBool(newState) : utils.makeBool(newState);
+                                    if (target) bitmask |= (1 << (r.id - 1));
+                                }
+                                else if (current)
+                                bitmask |= (1 << (r.id - 1));
+                        }
+                        if (this.i2c.isMock) {
+                            this._relayBitmask1 = bitmask & 0xFF;
+                            if (this.options.controllerType !== 'pcf8574') this._relayBitmask2 = (bitmask & 0xFF00) >> 8;
+
+                        }
+                        else this.options.controllerType === 'pcf8574' ? await this.writeByte(bitmask) : await this.writeWord(bitmask);
+                        if (relay.state !== newState) {
+                            relay.state = newState;
+                            relay.tripTime = new Date().getTime();
+                        }
+                    }
+                    break;
                 case 'bit':
                     // Make sure we have all the relay states up to date.
                     // MCP23017 uses 0x12 for port A (bmOrd 0) and 0x13 for port B (bmOrd 1).
@@ -680,7 +870,7 @@ export class i2cRelay extends i2cDeviceBase {
                         }
                         if (typeof cmdByte !== 'undefined') command.push(cmdByte);
                         command.push(byte);
-                        if (this.i2c.isMock) bmOrd === 0 ? this._relayBitmask1 = byte : this._relayBitMask2 = byte;
+                        if (this.i2c.isMock) bmOrd === 0 ? this._relayBitmask1 = byte : this._relayBitmask2 = byte;
                     }
                     break;
                 default:

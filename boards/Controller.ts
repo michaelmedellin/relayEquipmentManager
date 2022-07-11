@@ -1694,7 +1694,7 @@ export class DataTrigger extends ConfigItem {
             for (let i = 0; i < data.bindings.length; i++) {
                 let b = data.bindings[i];
                 if (!utils.makeBool(b.isActive)) continue;
-                let op = vMaps.operators.transform(b.operator);
+                let op = vMaps.operators.transformByName(b.operator);
                 if (n !== 0)
                     expression += ' && ';
                 expression += `${dataName}.${b.binding} ${op.op} `;
@@ -2385,7 +2385,7 @@ export class I2cBus extends ConfigItem {
     }
     public async setDeviceState(binding: string | DeviceBinding, data: any): Promise<any> {
         try {
-            logger.info(`Setting device state ${binding}`);
+            logger.info(`Setting device state ${typeof binding === 'object' ? JSON.stringify(binding) : binding}`);
             let bind = typeof binding === 'string' ? new DeviceBinding(binding) : binding;
             if (isNaN(bind.deviceId)) return Promise.reject(new Error(`setDeviceState: Invalid i2c deviceId ${bind.busId} ${bind.deviceId} - ${bind.binding}`));
             let device = this.devices.find(elem => elem.id === bind.deviceId);
@@ -4317,7 +4317,7 @@ export class OneWireBus extends ConfigItem {
     }
     public async setDeviceState(binding: string | DeviceBinding, data: any): Promise<any> {
         try {
-            logger.info(`Setting device state ${binding}`);
+            logger.info(`Setting device state ${typeof binding === 'object' ? JSON.stringify(binding) : binding}`);
             let bind = typeof binding === 'string' ? new DeviceBinding(binding) : binding;
             if (isNaN(bind.deviceId)) return Promise.reject(new Error(`setDeviceState: Invalid i2c deviceId ${bind.busId} ${bind.deviceId} - ${bind.binding}`));
             let device = this.devices.find(elem => elem.id === bind.deviceId);
