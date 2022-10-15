@@ -756,6 +756,7 @@ export class AtlasEZOpH extends AtlasEZO {
     }
 }
 export class AtlasEZOpmp extends AtlasEZO {
+    public latchTimer: NodeJS.Timeout;
     public async initAsync(deviceType): Promise<boolean> {
         try {
             this.stopPolling();
@@ -932,7 +933,7 @@ export class AtlasEZOpmp extends AtlasEZO {
             return Promise.resolve(this.dispense);
         }
         catch (err) { logger.error(new Error(`Could not get dispense status: ${typeof err !== 'undefined' ? err.message : ''}`)); }
-        finally { if (this.dispense.dispensing) this._timerRead = setTimeout(() => { this.getDispenseStatus(); }, this.options.readInterval); this.suspendPolling = false; }
+        finally { if (this.dispense.dispensing) this._timerRead = setTimeout(() => { this.getDispenseStatus(); }, 1000); this.suspendPolling = false; }
     }
     public async getVolumeDispensed(): Promise<boolean> {
         try {
@@ -950,6 +951,8 @@ export class AtlasEZOpmp extends AtlasEZO {
     }
     public async stopDispense(): Promise<boolean> {
         try {
+            if (this.latchTimer) clearTimeout(this.latchTimer);
+            this.latchTimer = null;
             await this.execCommand('X', 300);
             this.values.mode = this.transformDispenseMode('off', false);
             this.values.paused = false;
@@ -978,64 +981,82 @@ export class AtlasEZOpmp extends AtlasEZO {
     }
     public async dispenseContinuous(reverse: boolean = false): Promise<boolean> {
         try {
-            await this.execCommand(`D,${utils.makeBool(reverse) ? '-*' : '*'}`, 300);
-            this.dispense.continuous = true;
-            this.dispense.dispensing = true;
-            this.dispense.reverse = reverse;
-            this.dispense.paused = false;
-            this.dispense.volume = null;
-            this.dispense.dispenseTime = null;
-            this.dispense.flowRate = null;
-            this.dispense.mode = this.transformDispenseMode('continuous', false);
+            if (this.dispense.dispensing === true) {
+            }
+            else {
+                await this.execCommand(`D,${utils.makeBool(reverse) ? '-*' : '*'}`, 300);
+                this.dispense.continuous = true;
+                this.dispense.dispensing = true;
+                this.dispense.reverse = reverse;
+                this.dispense.paused = false;
+                this.dispense.volume = null;
+                this.dispense.dispenseTime = null;
+                this.dispense.flowRate = null;
+                this.dispense.mode = this.transformDispenseMode('continuous', false);
+            }
             webApp.emitToClients('i2cDataValues', { bus: this.i2c.busNumber, address: this.device.address, values: this.values });
-            this.getDispenseStatus();
-            return Promise.resolve(true);
+            await this.getDispenseStatus();
+            return true;
         }
         catch (err) { this.logError(err); }
     }
     public async dispenseVolume(volume: number, minutes?:number): Promise<boolean> {
         try {
-            typeof minutes === 'undefined' || minutes <= 0 ? await this.execCommand(`D,${volume.toFixed(2)}`, 300) : await this.execCommand(`D,${volume.toFixed(2)},${minutes.toFixed(2)}`, 300);
-            this.dispense.dispensing = true;
-            this.dispense.reverse = volume < 0;
-            this.dispense.dispenseTime = typeof minutes !== 'undefined' ? minutes : null;
-            this.dispense.paused = false;
-            this.dispense.continuous = false;
-            this.dispense.volume = volume;
-            this.dispense.flowRate = null;
-            this.dispense.mode = this.transformDispenseMode(typeof minutes !== 'undefined' ? 'volOverTime' : 'vol', false);
+            if (this.dispense.dispensing === true) {
+                await this.getVolumeDispensed();
+            }
+            else {
+                typeof minutes === 'undefined' || minutes <= 0 ? await this.execCommand(`D,${volume.toFixed(2)}`, 300) : await this.execCommand(`D,${volume.toFixed(2)},${minutes.toFixed(2)}`, 300);
+                this.dispense.dispensing = true;
+                this.dispense.reverse = volume < 0;
+                this.dispense.dispenseTime = typeof minutes !== 'undefined' ? minutes : null;
+                this.dispense.paused = false;
+                this.dispense.continuous = false;
+                this.dispense.volume = volume;
+                this.dispense.flowRate = null;
+                this.dispense.mode = this.transformDispenseMode(typeof minutes !== 'undefined' ? 'volOverTime' : 'vol', false);
+            }
             webApp.emitToClients('i2cDataValues', { bus: this.i2c.busNumber, address: this.device.address, values: this.values });
-            this.getDispenseStatus();
-            return Promise.resolve(true);
+            await this.getDispenseStatus();
+            return true;
         }
         catch (err) { this.logError(err); }
     }
     public async dispenseFlowRate(rate: number, minutes?: number): Promise<boolean> {
         try {
-            typeof minutes === 'undefined' || minutes <= 0 ? await this.execCommand(`DC,${rate.toFixed(2)},*`, 300) : await this.execCommand(`DC,${rate.toFixed(2)},${minutes.toFixed(2)}`, 300);
-            this.dispense.flowRate = rate;
-            this.dispense.dispensing = true;
-            this.dispense.continuous = false;
-            this.dispense.reverse = rate < 0;
-            this.dispense.dispenseTime = typeof minutes !== 'undefined' ? minutes : null;
-            this.dispense.volume = null;
-            this.dispense.paused = false;
-            this.dispense.mode = this.transformDispenseMode(typeof minutes !== 'undefined' ? 'flowOverTime' : 'flowRate', false);
+            if (this.dispense.dispensing === true) {
+                await this.getVolumeDispensed();
+            }
+            else {
+                typeof minutes === 'undefined' || minutes <= 0 ? await this.execCommand(`DC,${rate.toFixed(2)},*`, 300) : await this.execCommand(`DC,${rate.toFixed(2)},${minutes.toFixed(2)}`, 300);
+                this.dispense.flowRate = rate;
+                this.dispense.dispensing = true;
+                this.dispense.continuous = false;
+                this.dispense.reverse = rate < 0;
+                this.dispense.dispenseTime = typeof minutes !== 'undefined' ? minutes : null;
+                this.dispense.volume = null;
+                this.dispense.paused = false;
+                this.dispense.mode = this.transformDispenseMode(typeof minutes !== 'undefined' ? 'flowOverTime' : 'flowRate', false);
+            }
             webApp.emitToClients('i2cDataValues', { bus: this.i2c.busNumber, address: this.device.address, values: this.values });
             this.getDispenseStatus();
-            return Promise.resolve(true);
+            return true;
         }
         catch (err) { this.logError(err); }
     }
     public async startDispense(opts:any): Promise<boolean> {
         try {
+            if (this.latchTimer) clearTimeout(this.latchTimer);
+            this.latchTimer = null;
             if (typeof opts === 'undefined' || typeof opts.dispense === 'undefined') return Promise.reject(new Error('Cannot dispense EZO-PMP. Dispense options not provided'));
             let reverse = utils.makeBool(opts.dispense.reverse);
             let flowRate = (reverse) ? Math.abs(parseFloat(opts.dispense.flowRate)) * -1 : parseFloat(opts.dispense.flowRate);
             let volume = (reverse) ? Math.abs(parseFloat(opts.dispense.volume)) * -1 : parseFloat(opts.dispense.volume);
+            if (this.dispense.dispensing !== true) this.dispense.startVolume = this.dispense.totalVolume.total || 0;
             switch (opts.dispense.method) {
                 case 'continuous':
                     await this.dispenseContinuous(utils.makeBool(opts.dispense.reverse));
+                    if (typeof opts.latch === 'number') this.latchTimer = setTimeout(() => { this.stopDispense(); }, opts.latch);
                     break;
                 case 'volume':
                     if (isNaN(volume)) return Promise.reject(new Error(`Cannot dispense EZO-PMP by volume. Invalid volume ${opts.dispense.volume}`));
@@ -1056,8 +1077,18 @@ export class AtlasEZOpmp extends AtlasEZO {
                     await this.dispenseFlowRate(parseFloat(opts.dispense.flowRate), parseFloat(opts.dispense.time));
                     break;
             }
-            return Promise.resolve(true);
+            return true;
         } catch (err) { this.logError(err); }
+    }
+    public async clearCalibration(): Promise<I2cDevice> {
+        try {
+            this.suspendPolling = true;
+            await this.execCommand(`Cal,clear`, 300);
+            await this.getCalibrated();
+            return Promise.resolve(this.device);
+        }
+        catch (err) { this.logError(err); Promise.reject(err); }
+        finally { this.suspendPolling = false; }
     }
     public async getCalibrated(): Promise<boolean> {
         try {
@@ -1214,6 +1245,33 @@ export class AtlasEZOpmp extends AtlasEZO {
             return this.dispense.dispensing;
         } catch (err) { return Promise.reject(err); }
     }
+    public async setDeviceState(binding: string | DeviceBinding, data: any): Promise<any> {
+        try {
+            if (data.state === true || data.isOn === true) {
+                if (this.latchTimer) clearTimeout(this.latchTimer);
+                this.latchTimer = null;
+
+                // We are dosing.  Unlike the demand calc setpoint
+                // we are not changing the original command.
+                if (typeof data.dispense === 'undefined') data.dispense = { method: 'continuous' };
+                await this.startDispense(data);
+            }
+            else {
+                if (this.dispense.dispensing) await this.stopDispense();
+            }
+            return extend(true, { state: this.dispense.dispensing || false }, this.dispense);
+        } catch (err) { return Promise.reject(err); }
+    }
+    public async closeAsync(): Promise<void> {
+        try {
+            await super.closeAsync();
+            await this.stopDispense();
+            return Promise.resolve();
+        }
+        catch (err) { return this.logError(err); }
+    }
+
+
 }
 export class AtlasEZOprs extends AtlasEZO {
     public async initAsync(deviceType): Promise<boolean> {

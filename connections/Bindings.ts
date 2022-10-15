@@ -360,6 +360,7 @@ class SocketServerConnection extends ServerConnection {
             let url = this.server.url;
             this._sock = io(url, { reconnectionDelay: 2000, reconnection: true, reconnectionDelayMax: 20000 });
             this._sock.on('connect_error', (err) => { logger.error(`Error connecting to ${this.server.name} ${url}: ${err.message}`); });
+            this._sock.on('error', (err) => { logger.error(`Socket Error ${this.server.name} ${url}: ${err.message}`); })
             this._sock.on('close', (sock) => { this.isOpen = false; logger.info(`Socket ${this.server.name} ${url} closed`); });
             this._sock.on('reconnecting', (sock) => { logger.info(`Reconnecting to ${this.server.name} : ${url}`); });
             this._sock.on('connect', (sock) => {
@@ -459,8 +460,11 @@ class MqttConnection extends ServerConnection {
     constructor(server: ConnectionSource) { super(server); }
     public async disconnect() {
         try {
-            if (typeof this._mqtt !== 'undefined') this._mqtt.removeAllListeners();
-            this._mqtt.end(false);
+            if (typeof this._mqtt !== 'undefined') {
+                this._mqtt.removeAllListeners();
+                this._mqtt.on('error', err => logger.error(`MQTT Error: ${err}`));
+                this._mqtt.end(false);
+            }
             this.isOpen = false;
             super.disconnect();
         } catch (err) { logger.error(`Error disconnecting MQTT ${this.server.name}`); }
@@ -519,7 +523,7 @@ class MqttConnection extends ServerConnection {
                 logger.info(`Binding MQTT Topic ${evt.topic} from ${this.server.name} to device ${binding}`);
                 this._mqtt.subscribe(evt.topic, (err, granted) => {
                     if (err)
-                        logger.error(`Error binding MQTT ${evt.topic} from ${this.server.name} to Device ${binding}`);
+                        logger.error(`Error binding MQTT ${evt.topic} from ${this.server.name} to Device ${binding} ${err}`);
                     else
                         logger.info(`Bound MQTT ${evt.topic} from ${this.server.name} to ${binding}`);
                 });
@@ -538,12 +542,18 @@ class MqttConnection extends ServerConnection {
                 for (let j = evt.triggers.length - 1; j >= 0; j--) {
                     let trig = evt.triggers[j];
                     if (typeof binding === 'undefined' || trig.binding.startsWith(binding)) {
+                        logger.info(`Resetting device triggers for MQTT event ${evt.topic} - ${binding}`);
                         evt.triggers.splice(j, 1);
                     }
                 }
                 if (evt.triggers.length === 0) {
-                    // Kill the socket we don't need it.
-                    try { this._mqtt.unsubscribe(evt.topic); } catch (err) { logger.error(`Error unsubscribing to MQTT topic ${evt.topic}`); }
+                    // Kill the topic we don't need it.
+                    logger.info(`Unsubscribing MQTT topic ${evt.topic}`);
+                    try {
+                        await this._mqtt.unsubscribe(evt.topic);
+                        logger.info(`Unsubscribed from ${evt.topic}`);
+                    } catch (err) { logger.error(`Error unsubscribing to MQTT topic ${evt.topic}`); }
+                    this.events.splice(i, 1);
                 }
             }
             for (let i = 0; i < cont.gpio.pins.length; i++) {
@@ -588,7 +598,7 @@ class MqttConnection extends ServerConnection {
                             this.events.push(evt);
                             this._mqtt.subscribe(evt.topic, (err, granted) => {
                                 if (err)
-                                    logger.error(`Error binding MQTT ${evt.topic} from ${this.server.name} to I2c Device ${bus.busNumber}-${device.address} ${device.name}`);
+                                    logger.error(`Error binding MQTT ${evt.topic} from ${this.server.name} to I2c Device ${bus.busNumber}-${device.address} ${device.name} ${err}`);
                                 else
                                     logger.info(`Bound MQTT ${evt.topic} from ${this.server.name} to I2c Device ${bus.busNumber}-${device.address} ${device.name}`);
                             });
@@ -676,7 +686,7 @@ class MqttConnection extends ServerConnection {
             if (typeof evt !== 'undefined') {
                 logger.info(`Processing MQTT topic ${topic}`);
                 // Do a little messag pre-processing because MQTT is lame.
-                if (msg.startsWith('{')) msg = JSON.parse(msg);
+                if (msg.startsWith('{') || msg.startsWith('[')) msg = JSON.parse(msg);
                 if (msg === 'true') msg = true;
                 else if (msg === 'false') msg = false;
                 else if (!isNaN(+msg)) msg = parseFloat(msg);
@@ -732,6 +742,9 @@ class MqttConnection extends ServerConnection {
                 //this._mqtt.disconnecting = false;
                 this.initSubscribe();
                 this.initPublish();
+            });
+            this._mqtt.on('error', (err) => {
+                logger.error(`Error connecting to MQTT server ${url}: ${err}`);
             });
         } catch (err) { logger.error(`Error connecting to MQTT broker ${err.message}`); }
     }
